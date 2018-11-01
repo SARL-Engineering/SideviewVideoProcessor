@@ -7,18 +7,19 @@ import cv2
 import tkinter as tk
 from tkinter import filedialog
 import os
-from time import sleep
+from time import sleep, time
 import multiprocessing as mp
 
 #####################################
 # Global Variables
 #####################################
 # Program specific
-NUMBER_PROCESSING_THREADS = 6
+NUMBER_PROCESSING_THREADS = 4
 
 # Assay specific
 # Video looks like [start----start_light------------------------first_tap----tap---tap---tap---etc---end]
 CORRECT_START_TO_FIRST_TAP_LENGTH = 27 * 60  # Seconds, so 27 minutes
+SECONDS_OF_VIDEO_TO_SAVE_BEFORE_TAP = 2
 
 RAW_FOLDER_NAME = "raw"
 PROCESSED_FOLDER_NAME = "processed"
@@ -27,28 +28,6 @@ SIDEVIEW_FOLDER_NAME = "Sideview"
 # Camera specific
 # Note for trigger levels, if it's None, it will ignore that color entirely
 CAMERA_PROFILES = {
-    # 1: {
-    #     "start_light_x_location": 715,
-    #     "start_light_y_location": 115,
-    #     "start_light_box_size": 20,
-    #
-    #     "start_light_trigger_levels": {
-    #         "red": 15,
-    #         "green": None,
-    #         "blue": None
-    #     },
-    #
-    #     "tap_light_x_location": 605,
-    #     "tap_light_y_location": 115,
-    #     "tap_light_box_size": 20,
-    #
-    #     "tap_light_trigger_levels": {
-    #         "red": 15,
-    #         "green": None,
-    #         "blue": None
-    #     }
-    # },
-
     2: {
         "start_light_x_location": 769,
         "start_light_y_location": 167,
@@ -82,7 +61,7 @@ CAMERA_PROFILES = {
             "blue": None
         },
 
-        "tap_light_x_location": 630,
+        "tap_light_x_location": 660,
         "tap_light_y_location": 215,
         "tap_light_box_size": 20,
 
@@ -128,9 +107,10 @@ CAMERA_NUMBER_POSITION_IN_SPLIT = 2
 # SideviewWorker Class Definition
 #####################################
 class SideviewWorker(object):
-    def __init__(self, video_input_path, video_output_path):
+    def __init__(self, video_input_path, video_output_path, worker_lock):
         self.video_input_path = video_input_path
         self.video_output_path = video_output_path
+        self.worker_lock = worker_lock  # type: mp.Lock
 
         self.filename = os.path.split(self.video_input_path)[1]
 
@@ -140,8 +120,12 @@ class SideviewWorker(object):
         self.video_reader = None  # type: cv2.VideoCapture
         self.video_writer = None  # type: cv2.VideoWriter
 
+        self.video_fps = None
+
         self.start_light_time = 0
         self.tap_light_time = 0
+
+        self.prior_frames = []
 
         self.do_work()
 
@@ -153,14 +137,25 @@ class SideviewWorker(object):
         self.camera_profile = CAMERA_PROFILES[int(self.filename.split(" ")[CAMERA_NUMBER_POSITION_IN_SPLIT])]
 
         self.video_reader = cv2.VideoCapture(self.video_input_path)
+        self.video_fps = self.video_reader.get(cv2.CAP_PROP_FPS)
 
         output_shape = (
             int(self.video_reader.get(cv2.CAP_PROP_FRAME_WIDTH)), int(self.video_reader.get(cv2.CAP_PROP_FRAME_HEIGHT)))
 
-        self.video_writer = cv2.VideoWriter(os.path.join(self.video_output_path, self.filename), self.fourcc,
-                                            self.video_reader.get(cv2.CAP_PROP_FPS), output_shape)
+        output_path = os.path.join(self.video_output_path, self.filename)
+
+        if not os.path.exists(output_path):
+            self.video_writer = cv2.VideoWriter(output_path, self.fourcc, self.video_fps, output_shape)
 
     def process_video(self):
+        # If output file already exists, don't reprocesses
+        if not self.video_writer:
+            self.locked_print("########## Skipped processing \"%s\". Output file already exists! ##########" % self.video_input_path)
+            return
+
+        self.locked_print("Started processing \"%s\"." % self.video_input_path)
+
+        start_time = time()
         while True:
             return_value, current_frame = self.video_reader.read()
 
@@ -173,20 +168,41 @@ class SideviewWorker(object):
             # self.is_led_over_trigger_level(current_frame, self.camera_profile, "start", show_preview=True)
             # self.is_led_over_trigger_level(current_frame, self.camera_profile, "tap", show_preview=True)
 
+            # Watch for lights and set times accordingly
             if self.start_light_time == 0:
                 if self.is_led_over_trigger_level(current_frame, self.camera_profile, "start"):
                     self.start_light_time = current_time
-                    # print("Start: %s" % self.start_light_time)
             elif self.tap_light_time == 0:
+                self.prior_frames.append((current_time, current_frame))
                 if self.is_led_over_trigger_level(current_frame, self.camera_profile, "tap"):
                     self.tap_light_time = current_time
-                    # print("Tap: %s\t Start-tap: %s" % (self.tap_light_time, self.tap_light_time - self.start_light_time))
 
+            # Adjust saved prior frames to only save last X seconds
+            while len(self.prior_frames) > (SECONDS_OF_VIDEO_TO_SAVE_BEFORE_TAP * self.video_fps):
+                del self.prior_frames[0]
+
+            # If tap finally found, save all prev frames first
+            if self.tap_light_time != 0 and len(self.prior_frames) > 0:
+                for _, frame in self.prior_frames:
+                    self.video_writer.write(frame)
+
+                self.prior_frames = []
+
+            # If we should be saving frames, do so
             is_valid_time = (current_time - self.start_light_time) < CORRECT_START_TO_FIRST_TAP_LENGTH
-
             if (self.start_light_time and is_valid_time) or self.tap_light_time != 0:
                 self.video_writer.write(current_frame)
 
+        if self.start_light_time == 0 or self.tap_light_time == 0:
+            self.locked_print("########## FAILED processing \"%s\". Start or tap light could not be found! ##########")
+        else:
+            self.locked_print("Finished processing \"%s\" in %d seconds." %
+                              (self.video_input_path, time() - start_time))
+
+    def locked_print(self, string):
+        self.worker_lock.acquire()
+        print(string)
+        self.worker_lock.release()
 
     @staticmethod
     def is_led_over_trigger_level(frame, camera_profile, start_or_tap, show_preview=False):
@@ -250,6 +266,7 @@ class SideviewVideoProcessor(object):
         self.paths_of_videos_to_process = []
 
         self.worker_processes = {}
+        self.worker_lock = mp.Lock()
 
         self.done_processing = False
 
@@ -287,7 +304,6 @@ class SideviewVideoProcessor(object):
             to_delete = []
             for process_path in self.worker_processes:
                 if not self.worker_processes[process_path].is_alive():
-                    print("Finished processing \"%s\"" % process_path)
                     self.worker_processes[process_path].join()
                     to_delete.append(process_path)
 
@@ -308,7 +324,8 @@ class SideviewVideoProcessor(object):
             # Only add as many as needed, or as many left
             for _ in range(number_to_add):
                 input_path = self.paths_of_videos_to_process.pop()
-                new_process = mp.Process(target=SideviewWorker, args=(input_path, self.processed_folder_path))
+                new_process = mp.Process(target=SideviewWorker,
+                                         args=(input_path, self.processed_folder_path, self.worker_lock))
                 self.worker_processes[input_path] = new_process
                 new_process.start()
 
