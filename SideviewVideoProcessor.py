@@ -14,7 +14,7 @@ import multiprocessing as mp
 # Global Variables
 #####################################
 # Program specific
-NUMBER_PROCESSING_THREADS = 1
+NUMBER_PROCESSING_THREADS = 6
 
 # Assay specific
 # Video looks like [start----start_light------------------------first_tap----tap---tap---tap---etc---end]
@@ -27,32 +27,32 @@ SIDEVIEW_FOLDER_NAME = "Sideview"
 # Camera specific
 # Note for trigger levels, if it's None, it will ignore that color entirely
 CAMERA_PROFILES = {
-    1: {
-        "start_light_x_location": 0,
-        "start_light_y_location": 0,
-        "start_light_box_size": 50,
-
-        "start_light_trigger_levels": {
-            "red": 15,
-            "green": None,
-            "blue": None
-        },
-
-        "tap_light_x_location": 0,
-        "tap_light_y_location": 0,
-        "tap_light_box_size": 0,
-
-        "tap_light_trigger_levels": {
-            "red": 15,
-            "green": None,
-            "blue": None
-        }
-    },
+    # 1: {
+    #     "start_light_x_location": 715,
+    #     "start_light_y_location": 115,
+    #     "start_light_box_size": 20,
+    #
+    #     "start_light_trigger_levels": {
+    #         "red": 15,
+    #         "green": None,
+    #         "blue": None
+    #     },
+    #
+    #     "tap_light_x_location": 605,
+    #     "tap_light_y_location": 115,
+    #     "tap_light_box_size": 20,
+    #
+    #     "tap_light_trigger_levels": {
+    #         "red": 15,
+    #         "green": None,
+    #         "blue": None
+    #     }
+    # },
 
     2: {
-        "start_light_x_location": 740,
-        "start_light_y_location": 140,
-        "start_light_box_size": 50,
+        "start_light_x_location": 769,
+        "start_light_y_location": 167,
+        "start_light_box_size": 20,
 
         "start_light_trigger_levels": {
             "red": 15,
@@ -60,9 +60,9 @@ CAMERA_PROFILES = {
             "blue": None
         },
 
-        "tap_light_x_location": 630,
-        "tap_light_y_location": 140,
-        "tap_light_box_size": 50,
+        "tap_light_x_location": 658,
+        "tap_light_y_location": 171,
+        "tap_light_box_size": 20,
 
         "tap_light_trigger_levels": {
             "red": 15,
@@ -72,9 +72,9 @@ CAMERA_PROFILES = {
     },
 
     3: {
-        "start_light_x_location": 0,
-        "start_light_y_location": 0,
-        "start_light_box_size": 0,
+        "start_light_x_location": 764,
+        "start_light_y_location": 214,
+        "start_light_box_size": 20,
 
         "start_light_trigger_levels": {
             "red": 15,
@@ -82,9 +82,9 @@ CAMERA_PROFILES = {
             "blue": None
         },
 
-        "tap_light_x_location": 0,
-        "tap_light_y_location": 0,
-        "tap_light_box_size": 0,
+        "tap_light_x_location": 630,
+        "tap_light_y_location": 215,
+        "tap_light_box_size": 20,
 
         "tap_light_trigger_levels": {
             "red": 15,
@@ -94,9 +94,9 @@ CAMERA_PROFILES = {
     },
 
     4: {
-        "start_light_x_location": 0,
-        "start_light_y_location": 0,
-        "start_light_box_size": 0,
+        "start_light_x_location": 747,
+        "start_light_y_location": 191,
+        "start_light_box_size": 20,
 
         "start_light_trigger_levels": {
             "red": 15,
@@ -104,9 +104,9 @@ CAMERA_PROFILES = {
             "blue": None
         },
 
-        "tap_light_x_location": 0,
-        "tap_light_y_location": 0,
-        "tap_light_box_size": 0,
+        "tap_light_x_location": 628,
+        "tap_light_y_location": 196,
+        "tap_light_box_size": 20,
 
         "tap_light_trigger_levels": {
             "red": 15,
@@ -168,7 +168,10 @@ class SideviewWorker(object):
                 break
 
             current_time = self.video_reader.get(cv2.CAP_PROP_POS_MSEC) / 1000
-            self.is_led_over_trigger_level(current_frame, self.camera_profile, "tap")
+
+            # Uncomment these for preview
+            # self.is_led_over_trigger_level(current_frame, self.camera_profile, "start", show_preview=True)
+            # self.is_led_over_trigger_level(current_frame, self.camera_profile, "tap", show_preview=True)
 
             if self.start_light_time == 0:
                 if self.is_led_over_trigger_level(current_frame, self.camera_profile, "start"):
@@ -186,13 +189,18 @@ class SideviewWorker(object):
 
 
     @staticmethod
-    def is_led_over_trigger_level(frame, camera_profile, start_or_tap):
+    def is_led_over_trigger_level(frame, camera_profile, start_or_tap, show_preview=False):
         # Variables from profile
         box_size = camera_profile["%s_light_box_size" % start_or_tap]
-        x1 = camera_profile["%s_light_x_location" % start_or_tap]
-        x2 = x1 + box_size
-        y1 = camera_profile["%s_light_y_location" % start_or_tap]
-        y2 = y1 + box_size
+        box_size_half = box_size / 2
+
+        x = camera_profile["%s_light_x_location" % start_or_tap]
+        y = camera_profile["%s_light_y_location" % start_or_tap]
+
+        x1 = int(x - box_size_half)
+        x2 = int(x + box_size_half)
+        y1 = int(y - box_size_half)
+        y2 = int(y + box_size_half)
 
         red_threshold = camera_profile["%s_light_trigger_levels" % start_or_tap]["red"]
         green_threshold = camera_profile["%s_light_trigger_levels" % start_or_tap]["green"]
@@ -204,7 +212,13 @@ class SideviewWorker(object):
 
         # This in in (B, G, R) format
         average_color_overall = np.average(average_color_per_row, axis=0)
-        # print(average_color_overall)
+
+        if show_preview:
+            cv2.imshow('frame', frame)
+            cv2.imshow('%s_led_frame' % start_or_tap, led_area_frame)
+            print("%s: %s" % (start_or_tap, average_color_overall))
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                exit()
 
         if blue_threshold:
             if average_color_overall[0] < blue_threshold:
@@ -217,10 +231,6 @@ class SideviewWorker(object):
         if red_threshold:
             if average_color_overall[2] < red_threshold:
                 return False
-
-        # cv2.imshow('frame', led_area_frame)
-        # if cv2.waitKey(1) & 0xFF == ord('q'):
-        #     exit()
 
         return True
 
