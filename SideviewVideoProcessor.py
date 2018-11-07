@@ -18,8 +18,8 @@ NUMBER_PROCESSING_THREADS = 4
 
 # Assay specific
 # Video looks like [start----start_light------------------------first_tap----tap---tap---tap---etc---end]
-CORRECT_START_TO_FIRST_TAP_LENGTH = 27 * 60  # Seconds, so 27 minutes
-SECONDS_OF_VIDEO_TO_SAVE_BEFORE_TAP = 2
+CORRECT_START_TO_FIRST_TAP_LENGTH = 30  # 27 * 60  # We need seconds, so 27 minutes * 60 #### FIXME!!!!!!
+SECONDS_BETWEEN_TAPS = 20  # This is in seconds, no conversion necessary
 
 RAW_FOLDER_NAME = "raw"
 PROCESSED_FOLDER_NAME = "processed"
@@ -29,40 +29,40 @@ SIDEVIEW_FOLDER_NAME = "Sideview"
 # Note for trigger levels, if it's None, it will ignore that color entirely
 CAMERA_PROFILES = {
     2: {
-        "start_light_x_location": 769,
-        "start_light_y_location": 167,
+        "start_light_x_location_percentage": 0.60078125,
+        "start_light_y_location_percentage": 0.2319444444,
         "start_light_box_size": 20,
 
         "start_light_trigger_levels": {
-            "red": 15,
+            "red": 20,
             "green": None,
             "blue": None
         },
 
-        "tap_light_x_location": 658,
-        "tap_light_y_location": 171,
+        "tap_light_x_location_percentage": 0.5140625,
+        "tap_light_y_location_percentage": 0.2375,
         "tap_light_box_size": 20,
 
         "tap_light_trigger_levels": {
-            "red": 15,
+            "red": 20,
             "green": None,
             "blue": None
         }
     },
 
     3: {
-        "start_light_x_location": 764,
-        "start_light_y_location": 214,
+        "start_light_x_location_percentage": 0.597265625,
+        "start_light_y_location_percentage": 0.2979166667,
         "start_light_box_size": 20,
 
         "start_light_trigger_levels": {
-            "red": 15,
+            "red": 20,
             "green": None,
             "blue": None
         },
 
-        "tap_light_x_location": 660,
-        "tap_light_y_location": 215,
+        "tap_light_x_location_percentage": 0.515625,
+        "tap_light_y_location_percentage": 0.2986111111,
         "tap_light_box_size": 20,
 
         "tap_light_trigger_levels": {
@@ -73,22 +73,22 @@ CAMERA_PROFILES = {
     },
 
     4: {
-        "start_light_x_location": 747,
-        "start_light_y_location": 191,
+        "start_light_x_location_percentage": 0.58359375,
+        "start_light_y_location_percentage": 0.2659722222,
         "start_light_box_size": 20,
 
         "start_light_trigger_levels": {
-            "red": 15,
+            "red": 20,
             "green": None,
             "blue": None
         },
 
-        "tap_light_x_location": 628,
-        "tap_light_y_location": 196,
+        "tap_light_x_location_percentage": 0.490625,
+        "tap_light_y_location_percentage": 0.2722222222,
         "tap_light_box_size": 20,
 
         "tap_light_trigger_levels": {
-            "red": 15,
+            "red": 20,
             "green": None,
             "blue": None
         }
@@ -100,7 +100,13 @@ CAMERA_PROFILES = {
 # ##### DO NOT EDIT ANYTHING BELOW THIS POINT!!!! #####
 #######################################################
 #######################################################
+SECONDS_BETWEEN_TAPS_HALVED = SECONDS_BETWEEN_TAPS / 2
+
 CAMERA_NUMBER_POSITION_IN_SPLIT = 2
+
+# Tuple positions in frame storage
+VIDEO_TIME = 0
+RAW_FRAME = 1
 
 
 #####################################
@@ -121,11 +127,10 @@ class SideviewWorker(object):
         self.video_writer = None  # type: cv2.VideoWriter
 
         self.video_fps = None
+        self.black_frame = None
 
         self.start_light_time = 0
         self.tap_light_time = 0
-
-        self.prior_frames = []
 
         self.do_work()
 
@@ -148,56 +153,127 @@ class SideviewWorker(object):
             self.video_writer = cv2.VideoWriter(output_path, self.fourcc, self.video_fps, output_shape)
 
     def process_video(self):
-        # If output file already exists, don't reprocesses
         if not self.video_writer:
             self.locked_print("########## Skipped processing \"%s\". Output file already exists! ##########" % self.video_input_path)
             return
 
         self.locked_print("Started processing \"%s\"." % self.video_input_path)
 
-        start_time = time()
+        prior_tap_frames = []
+        after_tap_frames = []
+
+        first_tap_seen = False
+
+        tap_light_previous = False
+        tap_light_activated = False
+
         while True:
             return_value, current_frame = self.video_reader.read()
 
             if not return_value:
                 break
 
+            if self.black_frame is None:
+                self.black_frame = current_frame.copy()
+                self.black_frame.fill(0)
+
             current_time = self.video_reader.get(cv2.CAP_PROP_POS_MSEC) / 1000
 
-            # Uncomment these for preview
-            # self.is_led_over_trigger_level(current_frame, self.camera_profile, "start", show_preview=True)
-            # self.is_led_over_trigger_level(current_frame, self.camera_profile, "tap", show_preview=True)
-
-            # Watch for lights and set times accordingly
+            # We're at very beginning, look for start light
             if self.start_light_time == 0:
                 if self.is_led_over_trigger_level(current_frame, self.camera_profile, "start"):
                     self.start_light_time = current_time
-            elif self.tap_light_time == 0:
-                self.prior_frames.append((current_time, current_frame))
-                if self.is_led_over_trigger_level(current_frame, self.camera_profile, "tap"):
-                    self.tap_light_time = current_time
+                    self.write_frames([(current_frame, current_frame)], print_writes=False)
+            elif (current_time - self.start_light_time) < CORRECT_START_TO_FIRST_TAP_LENGTH:
+                self.write_frames([(current_frame, current_frame)], print_writes=False)
+            else:
+                # Need way so that tap found only resets when value goes back UNDER the tap threshold
 
-            # Adjust saved prior frames to only save last X seconds
-            while len(self.prior_frames) > (SECONDS_OF_VIDEO_TO_SAVE_BEFORE_TAP * self.video_fps):
-                del self.prior_frames[0]
+                # If first tap not found
+                    # Look for tap and If tap found, save time and begin a local counter, add to AFTER BUFFER
+                    # Otherwise, add current frame to prior buffer and clean up
+                if not first_tap_seen:
+                    # Building up prior buffer if we haven't found first tap yet
+                    prior_tap_frames.append((current_time, current_frame))
 
-            # If tap finally found, save all prev frames first
-            if self.tap_light_time != 0 and len(self.prior_frames) > 0:
-                for _, frame in self.prior_frames:
-                    self.video_writer.write(frame)
+                    while len(prior_tap_frames) > (SECONDS_BETWEEN_TAPS_HALVED * self.video_fps):
+                        del prior_tap_frames[0]
 
-                self.prior_frames = []
+                    if self.is_led_over_trigger_level(current_frame, self.camera_profile, "tap"):
+                        first_tap_seen = True
+                        tap_light_previous = True
+                else:
+                    # Add current frame
+                    after_tap_frames.append((current_time, current_frame))
 
-            # If we should be saving frames, do so
-            is_valid_time = (current_time - self.start_light_time) < CORRECT_START_TO_FIRST_TAP_LENGTH
-            if (self.start_light_time and is_valid_time) or self.tap_light_time != 0:
-                self.video_writer.write(current_frame)
+                    # Check to see if we have a low to high light change
+                    tap_light_currently_present = self.is_led_over_trigger_level(current_frame, self.camera_profile, "tap")
 
-        if self.start_light_time == 0 or self.tap_light_time == 0:
-            self.locked_print("########## FAILED processing \"%s\". Start or tap light could not be found! ##########")
+                    if tap_light_currently_present != tap_light_previous:
+                        if tap_light_currently_present:
+                            tap_light_activated = True
+
+                        tap_light_previous = tap_light_currently_present
+
+                    # We're here if the tap light has JUST changed from off to on state
+                    if tap_light_activated:
+                        time_between_taps = current_time - after_tap_frames[0][VIDEO_TIME]
+
+                        # Write out all priors, would need to happen either way below
+                        self.write_frames(prior_tap_frames)
+
+                        # If no one messed up, or did in the right direction
+                        if time_between_taps >= SECONDS_BETWEEN_TAPS:
+                            num_frames_to_half = int(SECONDS_BETWEEN_TAPS_HALVED * self.video_fps)
+                            self.write_frames(after_tap_frames[:num_frames_to_half])
+                            prior_tap_frames = after_tap_frames[-num_frames_to_half:]
+                        else:
+                            half_of_frames = len(after_tap_frames) // 2
+                            self.write_frames(after_tap_frames[:half_of_frames])
+
+                            # Figure out missing frames and write them out
+                            num_missing_frames = int((SECONDS_BETWEEN_TAPS - time_between_taps) * self.video_fps)
+                            self.write_frames([(-1, self.black_frame) for _ in range(num_missing_frames)])
+
+                            # Move remainder of frames to prior
+                            prior_tap_frames = after_tap_frames[half_of_frames:]
+
+                        tap_light_activated = False
+
+                    # If we're here, the light hasn't just activated, we're just storing frames
+                    else:
+                        after_tap_frames.append((current_time, current_frame))
+
+        # If we're here, the video is over and we need to write out all priors and enough frames to make the
+        self.write_frames(prior_tap_frames)
+
+        time_in_after_buffer = after_tap_frames[-1][VIDEO_TIME] - after_tap_frames[0][VIDEO_TIME]
+
+        # If no one messed up, or did in the right direction
+        if time_in_after_buffer >= SECONDS_BETWEEN_TAPS_HALVED:
+            num_frames_to_half = int(SECONDS_BETWEEN_TAPS_HALVED * self.video_fps)
+            self.write_frames(after_tap_frames[:num_frames_to_half])
         else:
-            self.locked_print("Finished processing \"%s\" in %d seconds." %
-                              (self.video_input_path, time() - start_time))
+            self.write_frames(after_tap_frames)
+
+            # Figure out missing frames and write them out
+            num_missing_frames = int((SECONDS_BETWEEN_TAPS_HALVED - time_in_after_buffer) * self.video_fps)
+            self.write_frames([(-1, self.black_frame) for _ in range(num_missing_frames)])
+
+    def write_frames(self, frames, print_writes=True):
+        start_time = None
+        end_time = None
+
+        for frame in frames:
+            if start_time is None:
+                start_time = frame[VIDEO_TIME]
+
+            self.video_writer.write(frame[RAW_FRAME])
+
+            end_time = frame[VIDEO_TIME]
+
+        if print_writes:
+            self.locked_print("Wrote out %f to %f." % (start_time, end_time))
 
     def locked_print(self, string):
         self.worker_lock.acquire()
@@ -206,12 +282,14 @@ class SideviewWorker(object):
 
     @staticmethod
     def is_led_over_trigger_level(frame, camera_profile, start_or_tap, show_preview=False):
+        frame_shape_y, frame_shape_x = frame.shape[:2]
+
         # Variables from profile
         box_size = camera_profile["%s_light_box_size" % start_or_tap]
         box_size_half = box_size / 2
 
-        x = camera_profile["%s_light_x_location" % start_or_tap]
-        y = camera_profile["%s_light_y_location" % start_or_tap]
+        x = int(camera_profile["%s_light_x_location_percentage" % start_or_tap] * frame_shape_x)
+        y = int(camera_profile["%s_light_y_location_percentage" % start_or_tap] * frame_shape_y)
 
         x1 = int(x - box_size_half)
         x2 = int(x + box_size_half)
