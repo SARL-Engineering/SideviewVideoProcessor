@@ -18,8 +18,9 @@ NUMBER_PROCESSING_THREADS = 4
 
 # Assay specific
 # Video looks like [start----start_light------------------------first_tap----tap---tap---tap---etc---end]
-CORRECT_START_TO_FIRST_TAP_LENGTH = 30  # 27 * 60  # We need seconds, so 27 minutes * 60 #### FIXME!!!!!!
+CORRECT_START_TO_FIRST_TAP_LENGTH = 27 * 60  # We need seconds, so 27 minutes * 60
 SECONDS_BETWEEN_TAPS = 20  # This is in seconds, no conversion necessary
+NUMBER_OF_TAPS_TO_END = 10
 
 RAW_FOLDER_NAME = "raw"
 PROCESSED_FOLDER_NAME = "processed"
@@ -100,6 +101,8 @@ CAMERA_PROFILES = {
 # ##### DO NOT EDIT ANYTHING BELOW THIS POINT!!!! #####
 #######################################################
 #######################################################
+OUTPUT_FILENAME_APPEND = "_cut"
+
 SECONDS_BETWEEN_TAPS_HALVED = SECONDS_BETWEEN_TAPS / 2
 
 CAMERA_NUMBER_POSITION_IN_SPLIT = 2
@@ -118,9 +121,17 @@ class SideviewWorker(object):
         self.video_output_path = video_output_path
         self.worker_lock = worker_lock  # type: mp.Lock
 
-        self.filename = os.path.split(self.video_input_path)[1]
+        self.input_filename = os.path.split(self.video_input_path)[1]
 
-        self.fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        split_filename = self.input_filename.split(".")
+        split_filename[0] += OUTPUT_FILENAME_APPEND
+
+        self.output_filename = ".".join(split_filename)
+
+        if self.input_filename.endswith(".mp4"):
+            self.fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        elif self.input_filename.endswith(".avi"):
+            self.fourcc = cv2.VideoWriter_fourcc(*'mjpg')
 
         self.camera_profile = None
         self.video_reader = None  # type: cv2.VideoCapture
@@ -139,7 +150,7 @@ class SideviewWorker(object):
         self.process_video()
 
     def setup_video_reader_writer(self):
-        self.camera_profile = CAMERA_PROFILES[int(self.filename.split(" ")[CAMERA_NUMBER_POSITION_IN_SPLIT])]
+        self.camera_profile = CAMERA_PROFILES[int(self.input_filename.split(" ")[CAMERA_NUMBER_POSITION_IN_SPLIT])]
 
         self.video_reader = cv2.VideoCapture(self.video_input_path)
         self.video_fps = self.video_reader.get(cv2.CAP_PROP_FPS)
@@ -147,7 +158,7 @@ class SideviewWorker(object):
         output_shape = (
             int(self.video_reader.get(cv2.CAP_PROP_FRAME_WIDTH)), int(self.video_reader.get(cv2.CAP_PROP_FRAME_HEIGHT)))
 
-        output_path = os.path.join(self.video_output_path, self.filename)
+        output_path = os.path.join(self.video_output_path, self.output_filename)
 
         if not os.path.exists(output_path):
             self.video_writer = cv2.VideoWriter(output_path, self.fourcc, self.video_fps, output_shape)
@@ -159,6 +170,8 @@ class SideviewWorker(object):
 
         self.locked_print("Started processing \"%s\"." % self.video_input_path)
 
+        tap_count = 0
+
         prior_tap_frames = []
         after_tap_frames = []
 
@@ -167,10 +180,12 @@ class SideviewWorker(object):
         tap_light_previous = False
         tap_light_activated = False
 
+        reached_end_of_useful_data = False
+
         while True:
             return_value, current_frame = self.video_reader.read()
 
-            if not return_value:
+            if not return_value or reached_end_of_useful_data:
                 break
 
             if self.black_frame is None:
@@ -183,9 +198,9 @@ class SideviewWorker(object):
             if self.start_light_time == 0:
                 if self.is_led_over_trigger_level(current_frame, self.camera_profile, "start"):
                     self.start_light_time = current_time
-                    self.write_frames([(current_frame, current_frame)], print_writes=False)
+                    self.write_frames([(current_time, current_frame)], print_writes=False)
             elif (current_time - self.start_light_time) < CORRECT_START_TO_FIRST_TAP_LENGTH:
-                self.write_frames([(current_frame, current_frame)], print_writes=False)
+                self.write_frames([(current_time, current_frame)], print_writes=False)
             else:
                 # Need way so that tap found only resets when value goes back UNDER the tap threshold
 
@@ -200,14 +215,23 @@ class SideviewWorker(object):
                         del prior_tap_frames[0]
 
                     if self.is_led_over_trigger_level(current_frame, self.camera_profile, "tap"):
+                        tap_count += 1
                         first_tap_seen = True
                         tap_light_previous = True
                 else:
                     # Add current frame
                     after_tap_frames.append((current_time, current_frame))
 
+                    # Check if at end
+                    if tap_count == NUMBER_OF_TAPS_TO_END:
+                        time_from_last_tap_to_end = after_tap_frames[-1][VIDEO_TIME] - prior_tap_frames[-1][VIDEO_TIME]
+
+                        if time_from_last_tap_to_end >= SECONDS_BETWEEN_TAPS_HALVED:
+                            reached_end_of_useful_data = True
+                        continue
+
                     # Check to see if we have a low to high light change
-                    tap_light_currently_present = self.is_led_over_trigger_level(current_frame, self.camera_profile, "tap")
+                    tap_light_currently_present = self.is_led_over_trigger_level(current_frame, self.camera_profile, "tap", show_preview=False)
 
                     if tap_light_currently_present != tap_light_previous:
                         if tap_light_currently_present:
@@ -217,7 +241,7 @@ class SideviewWorker(object):
 
                     # We're here if the tap light has JUST changed from off to on state
                     if tap_light_activated:
-                        time_between_taps = current_time - after_tap_frames[0][VIDEO_TIME]
+                        time_between_taps = after_tap_frames[-1][VIDEO_TIME] - prior_tap_frames[-1][VIDEO_TIME]
 
                         # Write out all priors, would need to happen either way below
                         self.write_frames(prior_tap_frames)
@@ -238,26 +262,24 @@ class SideviewWorker(object):
                             # Move remainder of frames to prior
                             prior_tap_frames = after_tap_frames[half_of_frames:]
 
+                        after_tap_frames = []
+                        tap_count += 1
                         tap_light_activated = False
-
-                    # If we're here, the light hasn't just activated, we're just storing frames
-                    else:
-                        after_tap_frames.append((current_time, current_frame))
 
         # If we're here, the video is over and we need to write out all priors and enough frames to make the
         self.write_frames(prior_tap_frames)
 
-        time_in_after_buffer = after_tap_frames[-1][VIDEO_TIME] - after_tap_frames[0][VIDEO_TIME]
+        time_from_last_tap_to_end = after_tap_frames[-1][VIDEO_TIME] - prior_tap_frames[-1][VIDEO_TIME]
 
         # If no one messed up, or did in the right direction
-        if time_in_after_buffer >= SECONDS_BETWEEN_TAPS_HALVED:
+        if time_from_last_tap_to_end >= SECONDS_BETWEEN_TAPS_HALVED:
             num_frames_to_half = int(SECONDS_BETWEEN_TAPS_HALVED * self.video_fps)
             self.write_frames(after_tap_frames[:num_frames_to_half])
         else:
             self.write_frames(after_tap_frames)
 
             # Figure out missing frames and write them out
-            num_missing_frames = int((SECONDS_BETWEEN_TAPS_HALVED - time_in_after_buffer) * self.video_fps)
+            num_missing_frames = int((SECONDS_BETWEEN_TAPS_HALVED - time_from_last_tap_to_end) * self.video_fps)
             self.write_frames([(-1, self.black_frame) for _ in range(num_missing_frames)])
 
     def write_frames(self, frames, print_writes=True):
