@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import filedialog
 import os
 from time import sleep, time
+from datetime import datetime
 import multiprocessing as mp
 
 #####################################
@@ -22,9 +23,13 @@ CORRECT_START_TO_FIRST_TAP_LENGTH = 27 * 60  # We need seconds, so 27 minutes * 
 SECONDS_BETWEEN_TAPS = 20  # This is in seconds, no conversion necessary
 NUMBER_OF_TAPS_TO_END = 10
 
+# Folder layout, processing top level
+TOP_LEVEL_TYPE = "one_growout"  # "one_growout", "all_growouts"
+
 RAW_FOLDER_NAME = "raw"
 PROCESSED_FOLDER_NAME = "processed"
 SIDEVIEW_FOLDER_NAME = "Sideview"
+LOGS_FOLDER_NAME = "processing_logs"
 
 # Camera specific
 # Note for trigger levels, if it's None, it will ignore that color entirely
@@ -67,7 +72,7 @@ CAMERA_PROFILES = {
         "tap_light_box_size": 20,
 
         "tap_light_trigger_levels": {
-            "red": 15,
+            "red": 20,
             "green": None,
             "blue": None
         }
@@ -116,9 +121,11 @@ RAW_FRAME = 1
 # SideviewWorker Class Definition
 #####################################
 class SideviewWorker(object):
-    def __init__(self, video_input_path, video_output_path, worker_lock):
+    def __init__(self, growout_name, video_input_path, video_output_path, log_folder_path, worker_lock):
+        self.growout_name = growout_name
         self.video_input_path = video_input_path
         self.video_output_path = video_output_path
+        self.log_folder_path = log_folder_path
         self.worker_lock = worker_lock  # type: mp.Lock
 
         self.input_filename = os.path.split(self.video_input_path)[1]
@@ -127,11 +134,12 @@ class SideviewWorker(object):
         split_filename[0] += OUTPUT_FILENAME_APPEND
 
         self.output_filename = ".".join(split_filename)
+        self.full_output_path = None
 
         if self.input_filename.endswith(".mp4"):
             self.fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         elif self.input_filename.endswith(".avi"):
-            self.fourcc = cv2.VideoWriter_fourcc(*'mjpg')
+            self.fourcc = cv2.VideoWriter_fourcc(*'MJPG')
 
         self.camera_profile = None
         self.video_reader = None  # type: cv2.VideoCapture
@@ -143,7 +151,12 @@ class SideviewWorker(object):
         self.start_light_time = 0
         self.tap_light_time = 0
 
+        self.log_file_full_name = "%s/%s_log.txt" % (log_folder_path, self.growout_name)
+        self.log_file_writer = open(self.log_file_full_name, "a+")
+
         self.do_work()
+
+        self.log_file_writer.close()
 
     def do_work(self):
         self.setup_video_reader_writer()
@@ -158,10 +171,10 @@ class SideviewWorker(object):
         output_shape = (
             int(self.video_reader.get(cv2.CAP_PROP_FRAME_WIDTH)), int(self.video_reader.get(cv2.CAP_PROP_FRAME_HEIGHT)))
 
-        output_path = os.path.join(self.video_output_path, self.output_filename)
+        self.full_output_path = os.path.join(self.video_output_path, self.output_filename)
 
-        if not os.path.exists(output_path):
-            self.video_writer = cv2.VideoWriter(output_path, self.fourcc, self.video_fps, output_shape)
+        if not os.path.exists(self.full_output_path):
+            self.video_writer = cv2.VideoWriter(self.full_output_path, self.fourcc, self.video_fps, output_shape)
 
     def process_video(self):
         if not self.video_writer:
@@ -181,6 +194,8 @@ class SideviewWorker(object):
         tap_light_activated = False
 
         reached_end_of_useful_data = False
+
+        start_time = time()
 
         while True:
             return_value, current_frame = self.video_reader.read()
@@ -266,6 +281,13 @@ class SideviewWorker(object):
                         tap_count += 1
                         tap_light_activated = False
 
+        # Handle files that were too short (aka, bad files)
+        if not after_tap_frames or (tap_count != NUMBER_OF_TAPS_TO_END):
+            self.locked_print("########## Failed processing \"%s\"! Incorrect video length or taps not found! Deleting output! ##########")
+            self.video_writer.release()
+            os.unlink(self.full_output_path)
+            return
+
         # If we're here, the video is over and we need to write out all priors and enough frames to make the
         self.write_frames(prior_tap_frames)
 
@@ -282,7 +304,9 @@ class SideviewWorker(object):
             num_missing_frames = int((SECONDS_BETWEEN_TAPS_HALVED - time_from_last_tap_to_end) * self.video_fps)
             self.write_frames([(-1, self.black_frame) for _ in range(num_missing_frames)])
 
-    def write_frames(self, frames, print_writes=True):
+        self.locked_print("Finished processing \"%s\" in %d seconds." % (self.video_input_path, (time() - start_time)))
+
+    def write_frames(self, frames, print_writes=False):
         start_time = None
         end_time = None
 
@@ -298,8 +322,14 @@ class SideviewWorker(object):
             self.locked_print("Wrote out %f to %f." % (start_time, end_time))
 
     def locked_print(self, string):
+        iso_datetime_string = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+
         self.worker_lock.acquire()
-        print(string)
+
+        print("%s || %s" % (iso_datetime_string, string))
+        self.log_file_writer.write("%s || %s\n" % (iso_datetime_string, string))
+        self.log_file_writer.flush()
+
         self.worker_lock.release()
 
     @staticmethod
@@ -355,13 +385,15 @@ class SideviewWorker(object):
 # SideviewVideoProcessor Class Definition
 #####################################
 class SideviewVideoProcessor(object):
-    def __init__(self):
+    def __init__(self, log_folder_path=None):
         self.tk_root = tk.Tk()
         self.tk_root.withdraw()
 
         self.top_folder_path = None
         self.raw_folder_path = None
         self.processed_folder_path = None
+        self.log_folder_path = log_folder_path
+        self.growout_name = None
 
         self.paths_of_videos_to_process = []
 
@@ -370,10 +402,17 @@ class SideviewVideoProcessor(object):
 
         self.done_processing = False
 
-    def get_input_folder_path(self):
-        self.top_folder_path = filedialog.askdirectory(title="Select Input Directory")
+    def get_input_folder_path(self, top_folder_path=None):
+        if top_folder_path is None:
+            self.top_folder_path = filedialog.askdirectory(title="Select Input Directory")
+        else:
+            self.top_folder_path = top_folder_path
+
         self.raw_folder_path = "%s/%s/%s" % (self.top_folder_path, RAW_FOLDER_NAME, SIDEVIEW_FOLDER_NAME)
         self.processed_folder_path = "%s/%s/%s" % (self.top_folder_path, PROCESSED_FOLDER_NAME, SIDEVIEW_FOLDER_NAME)
+
+        if self.log_folder_path is None:
+            self.log_folder_path = "%s/%s/%s/%s" % (self.top_folder_path, PROCESSED_FOLDER_NAME, SIDEVIEW_FOLDER_NAME, LOGS_FOLDER_NAME)
 
         if self.top_folder_path is None:
             print("Please enter a valid path and try again...")
@@ -384,9 +423,15 @@ class SideviewVideoProcessor(object):
                   self.raw_folder_path)
             exit(2)
 
+        self.growout_name = os.path.split(self.top_folder_path)[-1]
+
         # Make output directory if doesn't exist
         if not os.path.exists(self.processed_folder_path):
             os.mkdir(self.processed_folder_path)
+
+        # Make logs directory if doesn't exist
+        if not os.path.exists(self.log_folder_path):
+            os.mkdir(self.log_folder_path)
 
         print("Looking for video files in \"%s\"" % self.raw_folder_path)
 
@@ -423,9 +468,11 @@ class SideviewVideoProcessor(object):
 
             # Only add as many as needed, or as many left
             for _ in range(number_to_add):
+
                 input_path = self.paths_of_videos_to_process.pop()
                 new_process = mp.Process(target=SideviewWorker,
-                                         args=(input_path, self.processed_folder_path, self.worker_lock))
+                                         args=(self.growout_name, input_path, self.processed_folder_path,
+                                               self.log_folder_path, self.worker_lock))
                 self.worker_processes[input_path] = new_process
                 new_process.start()
 
