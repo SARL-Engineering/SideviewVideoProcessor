@@ -407,7 +407,7 @@ class SideviewVideoProcessor(object):
 
     def get_input_folder_path(self, top_folder_path=None):
         if top_folder_path is None:
-            self.top_folder_path = filedialog.askdirectory(title="Select Input Directory")
+            self.top_folder_path = filedialog.askdirectory(title="Select Single Growout Directory")
         else:
             self.top_folder_path = top_folder_path
 
@@ -483,7 +483,27 @@ class SideviewVideoProcessor(object):
 
 
 if __name__ == "__main__":
-    sideview_video_processor = SideviewVideoProcessor()
-    sideview_video_processor.get_input_folder_path()
-    sideview_video_processor.find_video_paths()
-    sideview_video_processor.process_video_files()
+    if TOP_LEVEL_TYPE == "one_growout":
+        sideview_video_processor = SideviewVideoProcessor()
+        sideview_video_processor.get_input_folder_path()
+        sideview_video_processor.find_video_paths()
+        sideview_video_processor.process_video_files()
+    elif TOP_LEVEL_TYPE == "all_growouts":
+        tk_root = tk.Tk()
+        tk_root.withdraw()
+
+        top_folder_path = filedialog.askdirectory(title="Select Directory of All Growouts")
+        log_folder_path = "%s/%s" % (top_folder_path, LOGS_FOLDER_NAME)
+
+        if not os.path.exists(log_folder_path):
+            os.mkdir(log_folder_path)
+
+        for directory in os.listdir(top_folder_path):
+            if directory == LOGS_FOLDER_NAME:
+                continue
+            file_path = os.path.join(top_folder_path, directory)
+            sideview_video_processor = SideviewVideoProcessor(log_folder_path)
+            sideview_video_processor.get_input_folder_path(top_folder_path=file_path)
+            sideview_video_processor.find_video_paths()
+            sideview_video_processor.process_video_files()
+
