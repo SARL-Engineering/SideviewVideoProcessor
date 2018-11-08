@@ -499,9 +499,11 @@ if __name__ == "__main__":
             os.mkdir(log_folder_path)
 
         for directory in os.listdir(top_folder_path):
-            if directory == LOGS_FOLDER_NAME:
-                continue
             file_path = os.path.join(top_folder_path, directory)
+
+            if (directory == LOGS_FOLDER_NAME) or os.path.isfile(file_path):
+                continue
+
             sideview_video_processor = SideviewVideoProcessor(log_folder_path)
             sideview_video_processor.get_input_folder_path(top_folder_path=file_path)
             sideview_video_processor.find_video_paths()
