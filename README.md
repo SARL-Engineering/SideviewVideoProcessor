@@ -54,7 +54,7 @@ cutting and alignment was working as intended, as I could not find an off the sh
 <img src="_screenshots_/tap_light.jpg" title="tap_light">
 
 ### Normalized Outputs
-<img src="_screenshots_/outputs.png" title="outputs">  
+<img src="_screenshots_/outputs_example.png" title="outputs">  
 
 ### Log Files
 <img src="_screenshots_/log_files.png" title="log_files">
