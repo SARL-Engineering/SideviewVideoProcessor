@@ -178,7 +178,8 @@ class SideviewWorker(object):
 
     def process_video(self):
         if not self.video_writer:
-            self.locked_print("########## Skipped processing \"%s\". Output file already exists! ##########" % self.video_input_path)
+            self.locked_print(
+                "########## Skipped processing \"%s\". Output file already exists! ##########" % self.video_input_path)
             return
 
         self.locked_print("Started processing \"%s\"." % self.video_input_path)
@@ -220,8 +221,8 @@ class SideviewWorker(object):
                 # Need way so that tap found only resets when value goes back UNDER the tap threshold
 
                 # If first tap not found
-                    # Look for tap and If tap found, save time and begin a local counter, add to AFTER BUFFER
-                    # Otherwise, add current frame to prior buffer and clean up
+                # Look for tap and If tap found, save time and begin a local counter, add to AFTER BUFFER
+                # Otherwise, add current frame to prior buffer and clean up
                 if not first_tap_seen:
                     # Building up prior buffer if we haven't found first tap yet
                     prior_tap_frames.append((current_time, current_frame))
@@ -246,7 +247,8 @@ class SideviewWorker(object):
                         continue
 
                     # Check to see if we have a low to high light change
-                    tap_light_currently_present = self.is_led_over_trigger_level(current_frame, self.camera_profile, "tap", show_preview=False)
+                    tap_light_currently_present = self.is_led_over_trigger_level(current_frame, self.camera_profile,
+                                                                                 "tap", show_preview=False)
 
                     if tap_light_currently_present != tap_light_previous:
                         if tap_light_currently_present:
@@ -283,7 +285,8 @@ class SideviewWorker(object):
 
         # Handle files that were too short (aka, bad files)
         if not after_tap_frames or (tap_count != NUMBER_OF_TAPS_TO_END):
-            self.locked_print("########## Failed processing \"%s\"! Incorrect video length or taps not found! Deleting output! ##########")
+            self.locked_print(
+                "########## Failed processing \"%s\"! Incorrect video length or taps not found! Deleting output! ##########" % self.video_input_path)
             self.video_writer.release()
             os.unlink(self.full_output_path)
             return
@@ -412,7 +415,8 @@ class SideviewVideoProcessor(object):
         self.processed_folder_path = "%s/%s/%s" % (self.top_folder_path, PROCESSED_FOLDER_NAME, SIDEVIEW_FOLDER_NAME)
 
         if self.log_folder_path is None:
-            self.log_folder_path = "%s/%s/%s/%s" % (self.top_folder_path, PROCESSED_FOLDER_NAME, SIDEVIEW_FOLDER_NAME, LOGS_FOLDER_NAME)
+            self.log_folder_path = "%s/%s/%s/%s" % (
+                self.top_folder_path, PROCESSED_FOLDER_NAME, SIDEVIEW_FOLDER_NAME, LOGS_FOLDER_NAME)
 
         if self.top_folder_path is None:
             print("Please enter a valid path and try again...")
@@ -468,7 +472,6 @@ class SideviewVideoProcessor(object):
 
             # Only add as many as needed, or as many left
             for _ in range(number_to_add):
-
                 input_path = self.paths_of_videos_to_process.pop()
                 new_process = mp.Process(target=SideviewWorker,
                                          args=(self.growout_name, input_path, self.processed_folder_path,
