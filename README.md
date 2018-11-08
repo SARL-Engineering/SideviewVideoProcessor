@@ -37,7 +37,7 @@ is portable, more or less, and so that the python files are easily modifiable.
 ### Processing Power Note
 This program is extremely intensive, especially when the number of processes is more than 1. If you go to use this I 
 recommend starting at 1, check task manager to determine the single process performance, and adjust as necessary to 
-find a healthy number that provide a little overhead for the system. My system with an i7-2600 and 8GB DDR3 could only 
+find a healthy number that provides a little overhead for the system. My system with an i7-2600 and 8GB DDR3 could only 
 handle 4 without pegging the cpu at 100%. 5 seemed like the right number if I were using this program server style and 
 not as my main desktop too.
 
@@ -65,4 +65,3 @@ cutting and alignment was working as intended, as I could not find an off the sh
     * numpy
     * tkinter
     * multiprocessing
-* Executable built with pyinstaller
