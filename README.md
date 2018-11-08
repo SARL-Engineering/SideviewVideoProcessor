@@ -26,8 +26,8 @@ this processing.
 * At the end, it writes out the last ten seconds before the individual process dies
 * Provides simple log files with file names, processing success, processing failures, and invalid input video errors
 
-The end result of this processing are video files all 30 minutes, 19 seconds to 30 minutes, 20 seconds long that should
-be able to all be put into the motion analysis tool with no trouble.
+The end result of this processing are video files that are 30 minutes, 19 seconds to 30 minutes, 20 seconds long that 
+should be able to be put into the motion analysis tool with no trouble.
 
 ### How to Run
 To run the version on the releases page, extract the contents, then run either the "Launch SideViewVideoProcessor.bat"
@@ -54,10 +54,10 @@ cutting and alignment was working as intended, as I could not find an off the sh
 <img src="_screenshots_/tap_light.jpg" title="tap_light">
 
 ### Normalized Outputs
-<img src="_screenshots_/outputs.jpg" title="outputs">  
+<img src="_screenshots_/outputs.png" title="outputs">  
 
 ### Log Files
-<img src="_screenshots_/log_files.jpg" title="log_files">
+<img src="_screenshots_/log_files.png" title="log_files">
 
 # Build Information
 * Python 3.7 64-bit
