@@ -15,7 +15,7 @@ import multiprocessing as mp
 # Global Variables
 #####################################
 # Program specific
-NUMBER_PROCESSING_THREADS = 4
+NUMBER_PROCESSES = 4  # How many videos to process simultaneously
 
 # Assay specific
 # Video looks like [start----start_light------------------------first_tap----tap---tap---tap---etc---end]
@@ -121,12 +121,13 @@ RAW_FRAME = 1
 # SideviewWorker Class Definition
 #####################################
 class SideviewWorker(object):
-    def __init__(self, growout_name, video_input_path, video_output_path, log_folder_path, worker_lock):
+    def __init__(self, growout_name, video_input_path, video_output_path, log_folder_path, worker_lock, iso_datetime_string):
         self.growout_name = growout_name
         self.video_input_path = video_input_path
         self.video_output_path = video_output_path
         self.log_folder_path = log_folder_path
         self.worker_lock = worker_lock  # type: mp.Lock
+        self.iso_datetime_string = iso_datetime_string
 
         self.input_filename = os.path.split(self.video_input_path)[1]
 
@@ -151,7 +152,7 @@ class SideviewWorker(object):
         self.start_light_time = 0
         self.tap_light_time = 0
 
-        self.log_file_full_name = "%s/%s_log.txt" % (log_folder_path, self.growout_name)
+        self.log_file_full_name = "%s/%s_%s_log.txt" % (log_folder_path, self.growout_name, self.iso_datetime_string)
         self.log_file_writer = open(self.log_file_full_name, "a+")
 
         self.do_work()
@@ -411,16 +412,16 @@ class SideviewVideoProcessor(object):
         else:
             self.top_folder_path = top_folder_path
 
+        if self.top_folder_path == "":
+            print("Please enter a valid path and try again...")
+            exit(2)
+
         self.raw_folder_path = "%s/%s/%s" % (self.top_folder_path, RAW_FOLDER_NAME, SIDEVIEW_FOLDER_NAME)
         self.processed_folder_path = "%s/%s/%s" % (self.top_folder_path, PROCESSED_FOLDER_NAME, SIDEVIEW_FOLDER_NAME)
 
         if self.log_folder_path is None:
             self.log_folder_path = "%s/%s/%s/%s" % (
                 self.top_folder_path, PROCESSED_FOLDER_NAME, SIDEVIEW_FOLDER_NAME, LOGS_FOLDER_NAME)
-
-        if self.top_folder_path is None:
-            print("Please enter a valid path and try again...")
-            exit(2)
 
         if not os.path.exists(self.raw_folder_path):
             print("Raw input path \"%s\" could not be found. Please ensure directory exists. Path is case sensitive." %
@@ -448,6 +449,9 @@ class SideviewVideoProcessor(object):
         print("Found %d files to process." % len(self.paths_of_videos_to_process))
 
     def process_video_files(self):
+        # So we know when processing started
+        iso_datetime_string = datetime.now().strftime("%Y%m%dT%H%M%S")
+
         while not self.done_processing:
             # Find any processes that are finished, join back, then delete
             to_delete = []
@@ -466,7 +470,7 @@ class SideviewVideoProcessor(object):
                 break
 
             # Add new processes to get back up to limit
-            number_of_new_processes_to_add = NUMBER_PROCESSING_THREADS - len(self.worker_processes)
+            number_of_new_processes_to_add = NUMBER_PROCESSES - len(self.worker_processes)
             number_of_files_left_to_process = len(self.paths_of_videos_to_process)
             number_to_add = min(number_of_new_processes_to_add, number_of_files_left_to_process)
 
@@ -475,7 +479,7 @@ class SideviewVideoProcessor(object):
                 input_path = self.paths_of_videos_to_process.pop()
                 new_process = mp.Process(target=SideviewWorker,
                                          args=(self.growout_name, input_path, self.processed_folder_path,
-                                               self.log_folder_path, self.worker_lock))
+                                               self.log_folder_path, self.worker_lock, iso_datetime_string))
                 self.worker_processes[input_path] = new_process
                 new_process.start()
 
@@ -484,15 +488,24 @@ class SideviewVideoProcessor(object):
 
 if __name__ == "__main__":
     if TOP_LEVEL_TYPE == "one_growout":
+        print("Running in single growout mode!")
+
         sideview_video_processor = SideviewVideoProcessor()
         sideview_video_processor.get_input_folder_path()
         sideview_video_processor.find_video_paths()
         sideview_video_processor.process_video_files()
     elif TOP_LEVEL_TYPE == "all_growouts":
+        print("Running in all growouts mode!")
+
         tk_root = tk.Tk()
         tk_root.withdraw()
 
         top_folder_path = filedialog.askdirectory(title="Select Directory of All Growouts")
+
+        if top_folder_path == "":
+            print("Please enter a valid path and try again...")
+            exit(2)
+
         log_folder_path = "%s/%s" % (top_folder_path, LOGS_FOLDER_NAME)
 
         if not os.path.exists(log_folder_path):
@@ -509,3 +522,4 @@ if __name__ == "__main__":
             sideview_video_processor.find_video_paths()
             sideview_video_processor.process_video_files()
 
+    input("Processing complete. Press enter to exit.")
